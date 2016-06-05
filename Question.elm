@@ -4,6 +4,7 @@ import List exposing (map)
 import IndexedItem exposing (..)
 import Html exposing (..)
 import Html.App as Html
+import Html.Attributes exposing (..)
 import Html.Events exposing (onInput, onClick, onSubmit)
 
 type Model
@@ -40,7 +41,7 @@ questionFeedback question =
     let
         correct = markQuestion question
     in
-        div [] 
+        div [class ("question-feedback "++(if correct then "correct" else "incorrect"))] 
         [
             p [] [text (if correct then "Question correct" else "Question not yet correct")]
         ]
@@ -51,17 +52,17 @@ viewPart part = Html.map UpdatePart (Part.view part)
 viewSubQuestion : Model -> Html Msg
 viewSubQuestion question = case question of
     SinglePartQuestion part ->
-        div [] [viewPart part]
+        div [class "question single-part"] [viewPart part]
     NestedQuestion questions -> 
-        div [] 
+        div [class "question multi-part"] 
         [
-            ul [] (map (\p -> li [] [div [] [text ("Part "++(toString (p.id+1))), Html.map (UpdateQuestion p.id) (viewSubQuestion p.item)]]) questions)
+            ul [class "parts"] (map (\p -> li [] [div [] [text ("Part "++(toString (p.id+1))), Html.map (UpdateQuestion p.id) (viewSubQuestion p.item)]]) questions)
             , p [] [button [onClick Submit] [text "Submit all"]]
         ]
 
 view : Model -> Html Msg
 view question = 
-    div [] [
-        viewSubQuestion question
-        , questionFeedback question
+    div [class "question"] [
+          questionFeedback question
+        , viewSubQuestion question
     ]

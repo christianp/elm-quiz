@@ -65,10 +65,21 @@ updatePart = updateItem Part.update
 
 numberCorrect model = List.length (List.filter (\x -> Question.markQuestion x.item) model.pager.items)
 
+currentQuestionNumber model = 
+    case model.pager.current of
+        Nothing -> ""
+        Just x -> toString (x+1)
+
+numQuestions model = List.length model.pager.items
+
 view : Model -> Html Msg
 view model = 
-    div [] [
-          div [] [text ((toString (numberCorrect model))++" correct")]
-        , div [] [button [onClick PrevQuestion] [text "PREV"], button [onClick NextQuestion] [text "NEXT"]]
+    div [class "quiz"] [
+        header [class "quiz-header"] 
+            [
+              div [class "quiz-feedback"] [text ((toString (numberCorrect model))++" correct")]
+            , p [class "question-number"] [text ("Question "++(currentQuestionNumber model)++"/"++(toString (numQuestions model)))]
+            , nav [class "question-nav"] [button [onClick PrevQuestion] [text "PREV"], button [onClick NextQuestion] [text "NEXT"]]
+            ]
         , Html.map UpdatePager (Pager.view model.pager)
     ]

@@ -1,0 +1,23 @@
+html {
+    font-size: 16px;
+}
+body {
+    margin: 0 auto;
+    width: 800px;
+}
+
+.question-nav {
+    display: flex
+}
+.question-nav button {
+    flex: 1;
+    margin: 1rem 0;
+    height: 2rem;
+}
+
+.pager-item {
+    display: none;
+}
+.pager-item.current {
+    display: initial;
+}

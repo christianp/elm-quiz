@@ -81,7 +81,7 @@ isIntValidator part =
                 _ -> Err "Not a number answer"
 
 partValidators : Model -> List (Validation Model)
-partValidators part = [submittedAnswerValidator] ++ (
+partValidators part = [] ++ (
     case part.marker of 
         EmptyMarker -> []
         StringMarker _ -> []
@@ -119,7 +119,11 @@ stageStringAnswer answer = StagedAnswer (StringAnswer answer)
 stageNumberAnswer : String -> Msg
 stageNumberAnswer answer = StagedAnswer (NumberAnswer answer)
 
-answerField part stage = [p [] [textInput "Answer" [onInput stage], text " ", viewValidation part]]
+answerField part stage = 
+    let
+        (classes,validationMessage) = viewValidation part
+    in
+        [p [classList classes] [textInput "Answer" [onInput stage], text " ", validationMessage]]
 
 view : Model -> Html Msg
 view part = lazy (
@@ -145,24 +149,27 @@ view part = lazy (
 partFeedback : Model -> Html Msg
 partFeedback model = 
     let
+        submitted = case submittedAnswerValidator model of
+            Ok _ -> True
+            Err _ -> False
         correct = case partValid model of
             Ok _ -> 
                 Ok (markPart model)
             Err _ -> Err "Not valid"
-        message = case correct of
+        message = if not submitted then [] else case correct of
             Err _ -> []
             Ok result -> [text (if result then "Correct" else "Wrong")]
     in
-        p [] message
+        p [classList ([("part-feedback",True),("correct",submitted && (correct==Ok True)),("incorrect",submitted && (correct==Ok False)),("unsubmitted",not submitted)])] message
 
-viewValidation : Model -> Html Msg
+viewValidation : Model -> (List (String,Bool),Html Msg)
 viewValidation model =
     let
         result = partValid model
-        (color, message) =
+        (valid, message) =
         case result of 
-                Ok _ -> ("green","Valid")
-                Err message -> ("red",message)
+                Ok _ -> (True,"Valid")
+                Err message -> (False,message)
     in
-         span [ style [("color", color)] ] [ text message ]
+         ([("valid",valid),("invalid",not valid)], span [] [ text message ])
 

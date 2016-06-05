@@ -79,7 +79,7 @@ viewItem model item = case (currentItem model) of
             visible = item==currentItem
         in
            [
-               div (if visible then [] else [style [("display","none")]]) [Html.map (UpdateItem item.id) (model.viewItem item.item)]
+               div [class ("pager-item "++(if visible then "current" else ""))] [Html.map (UpdateItem item.id) (model.viewItem item.item)]
            ]
 
 view : Model item msg -> Html (Msg msg)
