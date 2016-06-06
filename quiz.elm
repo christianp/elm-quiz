@@ -23,16 +23,18 @@ main =
 
 type alias Model = 
     {
+        title: String,
         pager: Pager.Model Question.Model Question.Msg
     }
 
 type alias IndexedPart = IndexedItem Part.Model
 
 emptyModel : Model
-emptyModel = {pager = Pager.init Question.update Question.view []}
+emptyModel = {title="", pager = Pager.init Question.update Question.view []}
 
 questions = 
     [
+        Question.singlePartQuestion (Part.regexPart (Part.newPart "Write an odd number of x") "^x(xx)*$" "xxx"),
         Question.singlePartQuestion (Part.stringPart (Part.newPart "Write x") "x"),
         Question.multiPartQuestion
             [
@@ -40,7 +42,7 @@ questions =
                 Part.numberPart (Part.newPart "one digit") 0 9
             ]
     ]
-model = {emptyModel | pager = Pager.init Question.update Question.view questions}
+model = {emptyModel | title="Test quiz", pager = Pager.init Question.update Question.view questions}
 
 nth : Int -> List x -> Maybe x
 nth n list = List.head (List.drop n list)
@@ -77,7 +79,8 @@ view model =
     div [class "quiz"] [
         header [class "quiz-header"] 
             [
-              div [class "quiz-feedback"] [text ((toString (numberCorrect model))++" correct")]
+              h1 [class "quiz-title"] [text model.title]
+            , div [class "quiz-feedback"] [text ((toString (numberCorrect model))++" correct")]
             , p [class "question-number"] [text ("Question "++(currentQuestionNumber model)++"/"++(toString (numQuestions model)))]
             , nav [class "question-nav"] [button [onClick PrevQuestion] [text "PREV"], button [onClick NextQuestion] [text "NEXT"]]
             ]

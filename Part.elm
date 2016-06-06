@@ -1,4 +1,4 @@
-module Part exposing (Model,newPart,stringPart,numberPart,Msg,update,view,makeSubmit,markPart)
+module Part exposing (Model,newPart,stringPart,numberPart,regexPart,Msg,update,view,makeSubmit,markPart)
 import Html exposing (..)
 import String
 import List exposing (map)
@@ -7,16 +7,19 @@ import Html.Lazy exposing (lazy)
 import Html.Events exposing (onInput, onClick, onSubmit)
 import Validation exposing (..)
 import Input exposing (..)
+import Regex exposing (..)
 
 -- models
 
 type alias StringInfo = {correctAnswer: String}
 type alias NumberInfo = {minAnswer: Int, maxAnswer: Int}
+type alias RegexInfo = {correctPattern: Regex, displayAnswer: String}
 
 type Marker 
     = EmptyMarker
     | StringMarker StringInfo
     | NumberMarker NumberInfo
+    | RegexMarker RegexInfo
 
 type alias EmptyAnswer = ()
 
@@ -41,6 +44,9 @@ stringPart model correctAnswer = {model | marker = StringMarker {correctAnswer =
 
 numberPart : Model -> Int -> Int -> Model
 numberPart model minAnswer maxAnswer = {model | marker = NumberMarker {minAnswer = minAnswer, maxAnswer = maxAnswer}, stagedAnswer = NumberAnswer ""}
+
+regexPart : Model -> String -> String -> Model
+regexPart model pattern displayAnswer = {model | marker = RegexMarker {correctPattern = regex pattern, displayAnswer = displayAnswer},stagedAnswer = StringAnswer ""}
 
 -- update
 
@@ -83,9 +89,8 @@ isIntValidator part =
 partValidators : Model -> List (Validation Model)
 partValidators part = [] ++ (
     case part.marker of 
-        EmptyMarker -> []
-        StringMarker _ -> []
         NumberMarker _ -> [isIntValidator]
+        _ -> []
     )
 
 markPart : Model -> Bool
@@ -102,11 +107,16 @@ markPart part = case part.submittedAnswer of
                    Err _ -> False
                    Ok n -> markNumber info n
             _ -> False
+        RegexMarker info -> case answer of
+            StringAnswer answer -> markRegex info answer
+            _ -> False
 
 markString : StringInfo -> String -> Bool
 markString {correctAnswer} answer = answer==correctAnswer
 markNumber : NumberInfo -> Int -> Bool
 markNumber {minAnswer,maxAnswer} n = n>=minAnswer && n<=maxAnswer
+markRegex : RegexInfo -> String -> Bool
+markRegex info answer = contains info.correctPattern answer
 
 partValid : Model -> Result String Bool
 partValid part = modelValid part (partValidators part)
@@ -132,10 +142,10 @@ view part = lazy (
         [
             Html.form [onSubmit Submit]
             ([p [] [text part.prompt]]
-            ++(case part.marker of
-                    EmptyMarker -> []
-                    StringMarker _ -> answerField part stageStringAnswer
-                    NumberMarker _ -> answerField part stageNumberAnswer
+            ++(case part.stagedAnswer of
+                    EmptyAnswer -> []
+                    StringAnswer _ -> answerField part stageStringAnswer
+                    NumberAnswer _ -> answerField part stageNumberAnswer
             )
             ++[partFeedback part]
             ++(case part.marker of
