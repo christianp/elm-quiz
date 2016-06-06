@@ -4,6 +4,7 @@ import Html.App as Html
 import Html.Attributes exposing (..)
 import String
 import Dict
+import Dict exposing (Dict)
 import Set
 
 type Expression
@@ -25,12 +26,22 @@ type alias EvalError = String
 
 type alias EvaluatedAtom = Result EvalError TAtom
 
-eval : Expression -> EvaluatedAtom
-eval expr = case expr of
-    JustAtom a -> Ok a
-    BinOp op a b -> evalBinOp op (eval a) (eval b)
-    UnOp op a -> evalUnOp op (eval a)
-    FunctionApplication op args -> evalFunction op (evalArgList (List.map eval args))
+eval : Dict Name TAtom -> Expression -> EvaluatedAtom
+eval scope expr = 
+    let
+        evalScope = eval scope
+    in
+        case expr of
+            JustAtom a -> evalAtom scope a
+            BinOp op a b -> evalBinOp op (evalScope a) (evalScope b)
+            UnOp op a -> evalUnOp op (evalScope a)
+            FunctionApplication op args -> evalFunction op (evalArgList (List.map evalScope args))
+
+evalAtom scope atom = case atom of
+    TName name -> case Dict.get name scope of
+        Nothing -> Err <| "variable "++name++" not in scope"
+        Just x -> Ok x
+    x -> Ok x
 
 evalBinNumberOp : (Float -> Float -> EvaluatedAtom) -> TAtom -> TAtom -> EvaluatedAtom
 evalBinNumberOp fn ea eb = case (ea,eb) of
@@ -133,6 +144,74 @@ findVars expr = case expr of
     UnOp op a -> findVars a
     FunctionApplication op args -> listUnion (List.map findVars args)
 
+dependencies: Dict Name Expression -> Dict Name (Set.Set Name)
+dependencies defs = Dict.map (\_ -> \expr -> findVars expr) defs
+
+validDefinition : Set.Set Name -> Dict Name (Set.Set Name) -> Name -> Result String ()
+validDefinition seen deps var = case Dict.get var deps of
+    Nothing -> Err <| "Variable "++var++" not defined"
+    Just vars -> 
+        if Set.member var seen then 
+            Err <| "cycle involving "++var 
+        else if Set.isEmpty vars then Ok () else
+            Set.foldr 
+                (\d -> \r -> Result.andThen r (\_ -> validDefinition (Set.insert var seen) deps d)) 
+                (Ok ()) 
+                vars
+
+validGraph : Dict Name Expression -> Result String ()
+validGraph definitions = 
+    let
+        deps = dependencies definitions
+        varOk name = case validDefinition Set.empty deps name of
+            Err msg -> Err <| "In definition of "++name++": "++msg
+            Ok () -> Ok ()
+    in
+        List.foldr (\d -> \r -> Result.andThen r (\_ -> varOk d)) (Ok ()) (Dict.keys definitions)
+
+executionOrder : Dict Name Expression -> List Name
+executionOrder definitions =
+    let
+        deps = dependencies definitions
+        names = Dict.keys deps
+    in
+        executionOrderHelp [] deps names
+
+executionOrderHelp : List Name -> Dict Name (Set.Set Name) -> List Name -> List Name
+executionOrderHelp seen deps vars = case vars of
+    [] -> []
+    a::rest ->
+        let
+            aDeps = case Dict.get a deps of
+                Nothing -> []
+                Just x -> Set.toList x
+            myOrder = List.foldl (\b -> \seen2 -> mergeLists seen2 (executionOrderHelp seen deps [b])) seen aDeps
+            nseen = myOrder ++ [a]
+        in
+            mergeLists nseen (executionOrderHelp nseen deps rest)
+
+mergeLists : List a -> List a -> List a
+mergeLists a b = case b of
+    [] -> a
+    x::rest -> mergeLists (if List.member x a then a else a++[x]) rest
+
+evaluateDefinitions : Dict Name Expression -> Result String (Dict Name TAtom)
+evaluateDefinitions definitions = 
+    let
+        order = executionOrder definitions
+        doVar : Name -> Result String (Dict Name TAtom) -> Result String (Dict Name TAtom)
+        doVar var rscope = 
+            case rscope of
+                (Err msg) as err -> err
+                Ok scope -> case Dict.get var definitions of
+                    Nothing -> rscope
+                    Just def -> 
+                        case eval scope def of
+                            Err msg -> Err <| "When evaluating "++var++": "++msg
+                            Ok v -> Ok (Dict.insert var v scope)
+    in
+        List.foldl doVar (Ok Dict.empty) order
+
 -- demo
  
 main = Html.program 
@@ -151,6 +230,7 @@ type Msg
 (!*) = \a -> \b -> BinOp "*" a b
 (!/) = \a -> \b -> BinOp "/" a b
 n x = JustAtom (TNumber x)
+name x = JustAtom (TName x)
 
 fa = FunctionApplication
 
@@ -163,12 +243,30 @@ showResult res = case res of
     Err msg -> "ERROR: "++msg
     Ok a -> renderAtom a
 
-init = (expr,Cmd.none)
+scope = Dict.fromList 
+    [
+        ("x",TNumber 1),
+        ("y",TNumber 2)
+    ]
+
+definitions = Dict.fromList
+    [
+        ("q",n 1),
+        ("x",name "q" !+ JustAtom (TString "A")),
+        ("y",name "x" !+ n 1),
+        ("z",name "x" !+ name "y")
+    ]
+
+init = (expr2,Cmd.none)
 view model = div [] 
     [
+        p [] [text (toString (Dict.map (\x -> renderExpression) definitions))],
+        p [] [text (toString (validGraph definitions))],
+        p [] [text (toString (executionOrder definitions))],
+        p [] [text (toString (evaluateDefinitions definitions))],
         p [] [text (toString (findVars expr2))],
         p [] [text (renderExpression model)],
-        text (showResult (eval model))
+        text (showResult (eval scope model))
     ]
 
 update msg model = (model,Cmd.none)
