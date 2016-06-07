@@ -1,4 +1,4 @@
-module Algebra exposing (Expression,TAtom,eval)
+module Algebra exposing (Expression,TAtom,eval,evaluateDefinitions)
 import Html exposing (..)
 import Html.App as Html
 import Html.Attributes exposing (..)
@@ -6,6 +6,9 @@ import String
 import Dict
 import Dict exposing (Dict)
 import Set
+import Combine exposing (..)
+import Combine.Infix exposing (..)
+import Combine.Num exposing (int)
 
 type Expression
  = JustAtom TAtom
@@ -144,6 +147,25 @@ findVars expr = case expr of
     UnOp op a -> findVars a
     FunctionApplication op args -> listUnion (List.map findVars args)
 
+-- Evaluate a dict of definitions
+
+evaluateDefinitions : Dict Name Expression -> Result String (Dict Name TAtom)
+evaluateDefinitions definitions = 
+    let
+        order = executionOrder definitions
+        doVar : Name -> Result String (Dict Name TAtom) -> Result String (Dict Name TAtom)
+        doVar var rscope = 
+            case rscope of
+                (Err msg) as err -> err
+                Ok scope -> case Dict.get var definitions of
+                    Nothing -> rscope
+                    Just def -> 
+                        case eval scope def of
+                            Err msg -> Err <| "When evaluating "++var++": "++msg
+                            Ok v -> Ok (Dict.insert var v scope)
+    in
+        List.foldl doVar (Ok Dict.empty) order
+
 dependencies: Dict Name Expression -> Dict Name (Set.Set Name)
 dependencies defs = Dict.map (\_ -> \expr -> findVars expr) defs
 
@@ -195,22 +217,49 @@ mergeLists a b = case b of
     [] -> a
     x::rest -> mergeLists (if List.member x a then a else a++[x]) rest
 
-evaluateDefinitions : Dict Name Expression -> Result String (Dict Name TAtom)
-evaluateDefinitions definitions = 
-    let
-        order = executionOrder definitions
-        doVar : Name -> Result String (Dict Name TAtom) -> Result String (Dict Name TAtom)
-        doVar var rscope = 
-            case rscope of
-                (Err msg) as err -> err
-                Ok scope -> case Dict.get var definitions of
-                    Nothing -> rscope
-                    Just def -> 
-                        case eval scope def of
-                            Err msg -> Err <| "When evaluating "++var++": "++msg
-                            Ok v -> Ok (Dict.insert var v scope)
-    in
-        List.foldl doVar (Ok Dict.empty) order
+-- parser
+
+ws : Parser String
+ws = regex "[ \t\r\n]*"
+
+addop : Parser (Expression -> Expression -> Expression)
+addop = choice [ (BinOp "+") <$ string "+", (BinOp "-") <$ string "-" ]
+
+mulop : Parser (Expression -> Expression -> Expression)
+mulop = choice [ (BinOp "*") <$ string "*", (BinOp "/") <$ string "/" ]
+
+expr : Parser Expression
+expr = rec <| \() -> term `chainl` addop
+
+term : Parser Expression
+term = rec <| \() -> factor `chainl` mulop
+
+parseTNumber : Parser TAtom
+parseTNumber = Combine.map (toFloat >> TNumber) int
+
+parseName : Parser Name
+parseName = (regex "[a-z]+")
+
+parseTName : Parser TAtom
+parseTName = Combine.map TName parseName
+
+parseTString : Parser TAtom
+parseTString = Combine.map TString (regex "\"[^\"]*\"")
+
+atom : Parser Expression
+atom = Combine.map JustAtom (choice [parseTNumber,parseTName,parseTString])
+
+factor : Parser Expression
+factor = rec <| \() -> between ws ws (parens expr <|> atom)
+
+compile : String -> Result String Expression
+compile s =
+  case parse (expr <* end) s of
+    (Ok n, _) ->
+      Ok n
+
+    (Err ms, cx) ->
+      Err ("parse error: " ++ (toString ms) ++ ", " ++ (toString cx))
 
 -- demo
  
@@ -234,8 +283,6 @@ name x = JustAtom (TName x)
 
 fa = FunctionApplication
 
-expr = fa "cos" [ (n pi) !/ (n 1 !* n 2)]
-
 expr2 = (fa "cos" [JustAtom (TName "x")]) !+ (JustAtom (TName "x")) !+ (JustAtom (TName "y"))
 
 showResult: EvaluatedAtom -> String
@@ -249,21 +296,28 @@ scope = Dict.fromList
         ("y",TNumber 2)
     ]
 
-definitions = Dict.fromList
+compileDefinitions : Dict Name String -> Result String (Dict Name Expression)
+compileDefinitions defStrings = Dict.foldl (\name -> \defString -> \out -> Result.map2 (\def -> \dict -> Dict.insert name def dict) (compile defString) out) (Ok Dict.empty) defStrings
+
+definitions = compileDefinitions <| Dict.fromList
     [
-        ("q",n 1),
-        ("x",name "q" !+ JustAtom (TString "A")),
-        ("y",name "x" !+ n 1),
-        ("z",name "x" !+ name "y")
+        ("q","1"),
+        ("x","q+1"),
+        ("y","x+1"),
+        ("z","x+y")
     ]
 
 init = (expr2,Cmd.none)
 view model = div [] 
     [
-        p [] [text (toString (Dict.map (\x -> renderExpression) definitions))],
-        p [] [text (toString (validGraph definitions))],
-        p [] [text (toString (executionOrder definitions))],
-        p [] [text (toString (evaluateDefinitions definitions))],
+        p [] [
+            text (case (Result.map2 (\expr -> \scope -> (renderExpression expr)++" = "++(toString (eval scope expr))) (compile "3-x") (definitions `Result.andThen` evaluateDefinitions)) of
+                Err msg -> msg
+                Ok s -> s
+            )
+        ],
+        p [] [text (toString (Result.map (Dict.map (\x -> renderExpression)) definitions))],
+        p [] [text (toString (Result.map evaluateDefinitions definitions))],
         p [] [text (toString (findVars expr2))],
         p [] [text (renderExpression model)],
         text (showResult (eval scope model))
