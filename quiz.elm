@@ -8,41 +8,70 @@ import Part
 import IndexedItem exposing (..)
 import Question
 import Pager exposing (..)
+import Algebra exposing (..)
+import Dict
+import Platform.Cmd exposing (Cmd)
 
 main =
-    Html.beginnerProgram
+    Html.program
     {
-        model = model
-        , view = view
-        , update = update
+        init = init,
+        view = view,
+        update = update,
+        subscriptions = subscriptions
     }
 
+subscriptions model = Sub.none
 
 
 -- MODEL
 
+type alias QuestionPager = Pager.Model Question.Model Question.Msg
+
 type alias Model = 
     {
         title: String,
-        pager: Pager.Model Question.Model Question.Msg
+        pager: Maybe QuestionPager,
+        variableDefinitions : DefinitionDict,
+        questionDefinitions : List (Scope -> Question.Model),
+        scope : Maybe (Result String Scope)
     }
 
 type alias IndexedPart = IndexedItem Part.Model
 
 emptyModel : Model
-emptyModel = {title="", pager = Pager.init Question.update Question.view []}
+emptyModel = {title="", pager = Nothing, variableDefinitions = Dict.empty, scope = Nothing, questionDefinitions = []}
 
-questions = 
+questionDefinitions = 
     [
-        Question.singlePartQuestion (Part.regexPart (Part.newPart "Write an odd number of x") "^x(xx)*$" "xxx"),
-        Question.singlePartQuestion (Part.stringPart (Part.newPart "Write x") "x"),
+        Question.singlePartQuestion <| Part.newPart "x" (Part.numberPart "x-1" "x+1"),
+        Question.singlePartQuestion <| Part.newPart "Write an odd number of x" (Part.regexPart "^x(xx)*$" "xxx"),
+        Question.singlePartQuestion <| Part.newPart "Write x" (Part.stringPart "x"),
         Question.multiPartQuestion
             [
-                Part.stringPart (Part.newPart "a") "a",
-                Part.numberPart (Part.newPart "one digit") 0 9
+                Part.newPart "a" (Part.stringPart "a"),
+                Part.newPart "one digit" (Part.numberPart "0" "9")
             ]
     ]
-model = {emptyModel | title="Test quiz", pager = Pager.init Question.update Question.view questions}
+
+{-
+questionDefinitions =
+    [
+        Question.singlePartQuestion <| Part.newPart "Write an odd number of x" (Part.regexPart "^x(xx)*$" "xxx")
+    ]
+-}
+
+scope = Dict.empty
+
+init = 
+    (
+        { emptyModel | 
+            title="Test quiz", 
+            questionDefinitions = questionDefinitions,
+            variableDefinitions = Dict.fromList [("x","1")]
+        },
+        Cmd.none
+    )
 
 nth : Int -> List x -> Maybe x
 nth n list = List.head (List.drop n list)
@@ -53,36 +82,68 @@ type Msg
     = NextQuestion
     | PrevQuestion
     | UpdatePager (Pager.Msg Question.Msg)
+    | GenerateVariables
 
-update : Msg -> Model -> Model
-update action model =
+update : Msg -> Model -> (Model,Cmd Msg)
+update msg model = (updateModel msg model,Cmd.none)
+
+updateModel action model =
     case action of
-        PrevQuestion -> {model | pager = Pager.update Pager.doPrevItem model.pager}
-        NextQuestion -> {model | pager = Pager.update Pager.doNextItem model.pager}
-        UpdatePager msg -> {model | pager = Pager.update msg model.pager}
+        PrevQuestion -> updatePager action model
+        NextQuestion -> updatePager action model
+        UpdatePager msg -> updatePager action model
+        GenerateVariables ->
+            let
+                scope = evaluateDefinitions model.variableDefinitions
+                questions = case scope of
+                    Err msg -> Nothing
+                    Ok s -> Just (List.map (\q -> q s) model.questionDefinitions)
+                pager = Maybe.map (\questions -> Pager.init Question.update Question.view questions) questions
+            in
+                {model | scope=Just scope,pager=pager }
 
-updatePart = updateItem Part.update
 
+updatePager : Msg -> Model -> Model
+updatePager action model = case model.pager of
+    Nothing -> model
+    Just pager -> case action of
+        PrevQuestion -> {model | pager = Just (Pager.update Pager.doPrevItem pager)}
+        NextQuestion -> {model | pager = Just (Pager.update Pager.doNextItem pager)}
+        UpdatePager msg -> {model | pager = Just (Pager.update msg pager)}
+        _ -> model
 -- VIEW
 
-numberCorrect model = List.length (List.filter (\x -> Question.markQuestion x.item) model.pager.items)
+numberCorrect pager = List.length (List.filter (\x -> Question.markQuestion x.item) pager.items)
 
-currentQuestionNumber model = 
-    case model.pager.current of
+currentQuestionNumber : QuestionPager -> String
+currentQuestionNumber pager = 
+    case pager.current of
         Nothing -> ""
         Just x -> toString (x+1)
 
-numQuestions model = List.length model.pager.items
+numQuestions pager= List.length pager.items
 
 view : Model -> Html Msg
-view model = 
+view model = case model.scope of
+    Nothing -> viewFrontPage model
+    Just (Err msg) -> div [] [text msg]
+    Just (Ok scope) -> case model.pager of
+        Nothing -> div [] [text "No pager"]
+        Just pager -> viewQuiz model pager
+
+viewFrontPage model =
+    div [] [button [onClick GenerateVariables] [text "Generate"]]
+
+viewQuiz : Model -> QuestionPager -> Html Msg
+viewQuiz model pager = 
     div [class "quiz"] [
         header [class "quiz-header"] 
             [
               h1 [class "quiz-title"] [text model.title]
-            , div [class "quiz-feedback"] [text ((toString (numberCorrect model))++" correct")]
-            , p [class "question-number"] [text ("Question "++(currentQuestionNumber model)++"/"++(toString (numQuestions model)))]
+            , div [class "quiz-feedback"] [text ((toString (numberCorrect pager))++" correct")]
+            , p [class "question-number"] [text ("Question "++(currentQuestionNumber pager)++"/"++(toString (numQuestions pager)))]
             , nav [class "question-nav"] [button [onClick PrevQuestion] [text "PREV"], button [onClick NextQuestion] [text "NEXT"]]
             ]
-        , Html.map UpdatePager (Pager.view model.pager)
+        , Html.map UpdatePager (Pager.view pager)
+        , p [] [text (toString model.scope)]
     ]

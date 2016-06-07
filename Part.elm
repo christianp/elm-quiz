@@ -8,11 +8,13 @@ import Html.Events exposing (onInput, onClick, onSubmit)
 import Validation exposing (..)
 import Input exposing (..)
 import Regex exposing (..)
+import Algebra
+import Algebra exposing (Scope,TAtom,compile,eval)
 
 -- models
 
 type alias StringInfo = {correctAnswer: String}
-type alias NumberInfo = {minAnswer: Int, maxAnswer: Int}
+type alias NumberInfo = {minAnswer: Float, maxAnswer: Float}
 type alias RegexInfo = {correctPattern: Regex, displayAnswer: String}
 
 type Marker 
@@ -30,23 +32,40 @@ type Answer
 
 type alias Model =
     { 
+        scope: Scope,
         marker: Marker,
         stagedAnswer: Answer,
         submittedAnswer: Maybe Answer,
         prompt: String
     }
 
-newPart : String -> Model
-newPart prompt = {prompt = prompt, marker = EmptyMarker, stagedAnswer = EmptyAnswer, submittedAnswer = Nothing}
+evaluatePropertyInScope : String -> Scope -> Result String TAtom
+evaluatePropertyInScope def scope = case (compile def) of
+    Err msg -> Err msg
+    Ok expr -> eval scope expr
 
-stringPart : Model -> String -> Model
-stringPart model correctAnswer = {model | marker = StringMarker {correctAnswer = correctAnswer}, stagedAnswer = StringAnswer ""}
+newPart : String -> (Model -> Model) -> Scope -> Model
+newPart prompt partType scope = partType {prompt = prompt, marker = EmptyMarker, stagedAnswer = EmptyAnswer, submittedAnswer = Nothing, scope = scope}
 
-numberPart : Model -> Int -> Int -> Model
-numberPart model minAnswer maxAnswer = {model | marker = NumberMarker {minAnswer = minAnswer, maxAnswer = maxAnswer}, stagedAnswer = NumberAnswer ""}
+stringPart : String -> Model -> Model
+stringPart correctAnswer model = {model | marker = StringMarker {correctAnswer = correctAnswer}, stagedAnswer = StringAnswer ""}
 
-regexPart : Model -> String -> String -> Model
-regexPart model pattern displayAnswer = {model | marker = RegexMarker {correctPattern = regex pattern, displayAnswer = displayAnswer},stagedAnswer = StringAnswer ""}
+numberPart : String -> String -> Model -> Model
+numberPart minAnswerDef maxAnswerDef model = 
+    let
+        minAnswer = case (evaluatePropertyInScope minAnswerDef model.scope) `Result.andThen` Algebra.unwrapNumber of
+            Err msg -> 0
+            Ok v -> v
+        maxAnswer = case (evaluatePropertyInScope maxAnswerDef model.scope) `Result.andThen` Algebra.unwrapNumber of
+            Err msg -> 0
+            Ok v -> v
+    in
+        {model | marker = NumberMarker {minAnswer = minAnswer, maxAnswer = maxAnswer}, stagedAnswer = NumberAnswer ""}
+
+
+
+regexPart : String -> String -> Model -> Model
+regexPart pattern displayAnswer model = {model | marker = RegexMarker {correctPattern = regex pattern, displayAnswer = displayAnswer},stagedAnswer = StringAnswer ""}
 
 -- update
 
@@ -76,12 +95,12 @@ submittedAnswerValidator part =
         Nothing -> if answerChanged part.stagedAnswer then Err "Unsubmitted change" else Err "Nothing submitted"
         Just answer -> if answer==part.stagedAnswer then Ok True else Err "Unsubmitted change"
 
-isIntValidator part = 
+isFloatValidator part = 
     case part.submittedAnswer of
         Nothing -> Err ""
         Just submittedAnswer -> 
             case submittedAnswer of 
-                NumberAnswer n -> case (String.toInt n) of
+                NumberAnswer n -> case (String.toFloat n) of
                     Ok _ -> Ok True
                     Err _ -> Err "Not an integer"
                 _ -> Err "Not a number answer"
@@ -89,7 +108,7 @@ isIntValidator part =
 partValidators : Model -> List (Validation Model)
 partValidators part = [] ++ (
     case part.marker of 
-        NumberMarker _ -> [isIntValidator]
+        NumberMarker _ -> [isFloatValidator]
         _ -> []
     )
 
@@ -103,7 +122,7 @@ markPart part = case part.submittedAnswer of
             _ -> False
         NumberMarker info -> case answer of
             NumberAnswer answer -> 
-               case String.toInt answer of
+               case String.toFloat answer of
                    Err _ -> False
                    Ok n -> markNumber info n
             _ -> False
@@ -113,7 +132,7 @@ markPart part = case part.submittedAnswer of
 
 markString : StringInfo -> String -> Bool
 markString {correctAnswer} answer = answer==correctAnswer
-markNumber : NumberInfo -> Int -> Bool
+markNumber : NumberInfo -> Float -> Bool
 markNumber {minAnswer,maxAnswer} n = n>=minAnswer && n<=maxAnswer
 markRegex : RegexInfo -> String -> Bool
 markRegex info answer = contains info.correctPattern answer
@@ -140,6 +159,7 @@ view part = lazy (
     \part ->
         Html.div []
         [
+            div [] [text (toString part)],
             Html.form [onSubmit Submit]
             ([p [] [text part.prompt]]
             ++(case part.stagedAnswer of

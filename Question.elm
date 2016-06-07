@@ -6,13 +6,16 @@ import Html exposing (..)
 import Html.App as Html
 import Html.Attributes exposing (..)
 import Html.Events exposing (onInput, onClick, onSubmit)
+import Algebra exposing (Scope)
 
 type Model
     = SinglePartQuestion Part.Model
     | NestedQuestion (IndexedList Model)
 
-singlePartQuestion part = SinglePartQuestion part
-multiPartQuestion parts = NestedQuestion (List.indexedMap (\id -> \x -> indexItem id (singlePartQuestion x)) parts)
+singlePartQuestion : (Scope -> Part.Model) -> Scope -> Model
+singlePartQuestion part scope = SinglePartQuestion (part scope)
+multiPartQuestion : List (Scope -> Part.Model) -> Scope -> Model
+multiPartQuestion parts scope = NestedQuestion (List.indexedMap (\id -> \x -> indexItem id ((singlePartQuestion x) scope)) parts)
 
 type Msg
     = UpdatePart Part.Msg
