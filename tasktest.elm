@@ -20,18 +20,13 @@ main =
 
 queue = [0,1,0,3]
 
-type alias Model = TaskList.Model Int String
+type alias Model = {
+    taskList: TaskList.Model Int String
+}
 
-model = 
-    {
-        queue = queue,
-        items = (List.map (\_ -> Nothing) queue),
-        done = False
-    }
-init : (Model, Cmd Msg)
-init =
-  (model, Cmd.map TaskListMsg <| processQueue processItem model.queue)
+(taskListModel,taskListCmd,updateTaskList) = processQueue TaskListMsg processItem queue
 
+init = ({taskList = taskListModel},taskListCmd)
 
 straightAway do v = Task.perform do do (succeed v)
 
@@ -50,9 +45,9 @@ update : Msg -> Model -> (Model,Cmd Msg)
 update msg model = case msg of
     TaskListMsg msg -> 
         let
-            (model,cmd) = TaskList.update msg model
+            (taskList,cmd) = updateTaskList msg model.taskList
         in
-            (model,Cmd.map TaskListMsg cmd)
+            ({model | taskList = taskList}, cmd)
 
 
 -- SUBSCRIPTIONS
@@ -71,8 +66,8 @@ view model = div []
   [
     (
         ul [] (List.map 
-        ((Maybe.withDefault "?") >> (\x -> li [] [text x])) model.items)
+        ((Maybe.withDefault "?") >> (\x -> li [] [text x])) model.taskList.items)
     )
-    , p [] [text (if model.done then "done" else "working")]
+    , p [] [text (if model.taskList.done then "done" else "working")]
   ]
 
