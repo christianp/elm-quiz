@@ -9,7 +9,7 @@ import Dict exposing (Dict)
 import Set
 import Combine exposing (..)
 import Combine.Infix exposing (..)
-import Combine.Num exposing (int)
+import Combine.Num exposing (int,float)
 import Random
 import Task
 import Time
@@ -65,7 +65,18 @@ evalHelper path scope expr =
                     (Ok (JustAtom y),_) -> evalBinOp receiveResult op x y
                     (Ok expr,msg) -> (Ok (BinOp op (JustAtom x) expr),msg)
                 (Ok expr,msg) -> (Ok (BinOp op expr b),msg)
-            FunctionApplication op args -> (Ok (FunctionApplication op args),Cmd.none)   --evalFunction op (evalArgList (List.map evalScope args))
+            FunctionApplication op args -> 
+                let
+                    evalArgs = List.indexedMap evalScope args
+                    argExprs = List.map (\(expr,cmd) -> expr) evalArgs
+                    argCmds = Cmd.batch <| List.map (\(expr,cmd) -> cmd) evalArgs
+                    result = List.foldr (Result.map2 (::)) (Ok []) argExprs
+                in
+                    case result of
+                        Err err -> (Err <| "Function application: "++err,Cmd.none)
+                        Ok eargs -> case argsListReady args of
+                            Err _ -> (Ok (FunctionApplication op eargs),argCmds)
+                            Ok args -> evalFunction receiveResult op args
 
 evalAtom : Scope -> TAtom -> EvaluatedExpression
 evalAtom scope atom = case atom of
@@ -121,34 +132,43 @@ binRandom receiveResult aa ab = case (aa,ab) of
     (TNumber a,TNumber b) -> (Ok WaitForResult,Random.generate (\n -> receiveResult <| TNumber (toFloat n)) (Random.int (floor a) (floor b)))
     _ -> (Err "Random on something other than a number",Cmd.none)
 
-evalFunction : TOp -> Result EvalError (List TAtom) -> EvaluatedAtom
-evalFunction op eargs = case eargs of
-    Ok args -> case op of
-        "cos" -> fnCos args
-        _ -> Err <| "unknown op "++op
-    Err msg -> Err msg
+evalFunction : (TAtom -> EvalMsg) -> TOp -> List TAtom -> (EvaluatedExpression,Cmd EvalMsg)
+evalFunction receiveResult op args = case Dict.get op functions of
+    Nothing -> (Err <| "unknown op "++op,Cmd.none)
+    Just fn -> fn receiveResult args
 
-fnCos args = 
+functions = Dict.fromList
+    [
+        "cos" => unaryFunction cos,
+        "sin" => unaryFunction sin,
+        "choice" => \receiveResult -> \args -> (Ok WaitForResult, Random.generate ((Maybe.withDefault (TNumber 0)) >> receiveResult) (randomChoice args))
+    ]
+
+unaryFunction : (Float -> Float) -> (TAtom -> EvalMsg) -> List TAtom -> (EvaluatedExpression, Cmd EvalMsg)
+unaryFunction fn receiveResult args = 
     let
         n = List.head args
     in
-        case n of
+        (case n of
             Nothing -> Err "no argument given"
-            Just (TNumber x) -> Ok (TNumber (cos x))
+            Just (TNumber x) -> Ok (JustAtom <| TNumber (fn x))
             _ -> Err "sin something other than a number"
+        , Cmd.none)
 
-evalArgList : List EvaluatedAtom -> Result EvalError (List TAtom)
-evalArgList args = case args of
-    [] -> Ok []
-    a::rest -> case a of
-        Ok x ->
-            let
-                eRest = evalArgList rest
-            in
-                case eRest of
-                    Ok l -> Ok (x::l)
-                    Err msg -> Err msg
-        Err msg -> Err msg
+argsListReady : (List Expression) -> Result () (List TAtom)
+argsListReady args = List.foldl 
+    (\expr -> \list -> case expr of 
+        JustAtom x -> Result.map ((::) x) list
+        _ -> Err ()
+    )
+    (Ok [])
+    args
+
+randomChoice : List a -> Random.Generator (Maybe a)
+randomChoice things = Random.map (\n -> nth n things) (Random.int 0 ((List.length things)-1))
+
+nth : Int -> List a -> Maybe a
+nth n list = List.head <| List.drop n list
 
 -- render an expression to a string
 
@@ -263,7 +283,7 @@ runEvaluateDefinitions rmodel = case rmodel of
             Nothing -> (Err <| "Tried to evaluate variable "++var++", which hasn't been defined.",Cmd.none)
             Just expr ->
                 let
-                    (rexpr,cmd) = Debug.log "evaluate" (eval model.variables expr)
+                    (rexpr,cmd) = eval model.variables expr
                 in
                     case rexpr of
                         Err msg -> (Err <| "Error evaluating "++var++": "++msg,Cmd.none)
@@ -273,7 +293,7 @@ runEvaluateDefinitions rmodel = case rmodel of
                                 variables = case nexpr of
                                     JustAtom v -> Dict.insert var v model.variables
                                     _ -> model.variables
-                                order = if ready nexpr then Debug.log ("finished "++var) rest else (var::rest)
+                                order = if ready nexpr then rest else (var::rest)
                                 vmodel = {model| definitions = Dict.insert var nexpr model.definitions, variables = variables, order = order}
                             in
                                 if ready nexpr then runEvaluateDefinitions (Ok vmodel) else (Ok vmodel,Cmd.map (UpdateVariable var) cmd)
@@ -353,7 +373,7 @@ term : Parser Expression
 term = rec <| \() -> factor `chainl` mulop
 
 parseTNumber : Parser TAtom
-parseTNumber = Combine.map (toFloat >> TNumber) int
+parseTNumber = choice [Combine.map TNumber float, Combine.map (toFloat >> TNumber) int]
 
 parseName : Parser Name
 parseName = (regex "[a-z]+")
@@ -371,7 +391,10 @@ unary : Parser Expression
 unary = choice [(UnOp "-") <$ string "-", (UnOp "!") <$ string "!"] `Combine.andMap` factor
 
 factor : Parser Expression
-factor = rec <| \() -> between ws ws (parens expr <|> atom <|> unary)
+factor = rec <| \() -> between ws ws (function <|> parens expr <|> atom <|> unary)
+
+function : Parser Expression
+function = rec <| \() -> parseName `Combine.andThen` (\name -> Combine.map (\args -> FunctionApplication name args) (parens (sepBy (string ",") expr)) )
 
 compile : String -> Result String Expression
 compile s =
@@ -418,12 +441,12 @@ definitions = Dict.fromList
     [
         ("q","1 r 10"),
         ("t","(!1-1465554950231)/1000"),
-        ("y","1"),
+        ("y","choice(1,2,3)"),
         ("z","t+q+y"),
-        ("zq","z-q-t")
+        ("zq","z-q-t-y")
     ]
 
-def = "(!1 r 3)+(50r60)"
+def = "choice(1,2,3)"
 ex = compile def
 (initExpr,initExprCmd) = case ex of
     Err err -> (Err err,Cmd.none)
@@ -435,11 +458,12 @@ init : (TestModel, Cmd TestMsg)
 init = 
     (
         { expr = initExpr, defs = initDefs },
-        Cmd.batch [Cmd.map UpdateScope initDefsCmd]
+        Cmd.batch [Cmd.map UpdateScope initDefsCmd,Cmd.map UpdateExpr initExprCmd]
     )
 
 view model = div []
     [
+        p [] [ text <| toString <| compile "cos(1)"],
         p [] [ text def ],
         p [] [ text (Result.withDefault "?" (Result.map renderExpression ex))],
         p [] [ text (toString model.expr)],
@@ -458,7 +482,7 @@ viewDefinitions rdefs = div []
     ]
 
 update : TestMsg -> TestModel -> (TestModel,Cmd TestMsg)
-update msg model = case Debug.log "update test" msg of
+update msg model = case msg of
     UpdateExpr emsg ->
         let
             (expr,cmd) = updateExpression emsg model.expr
@@ -477,7 +501,7 @@ update msg model = case Debug.log "update test" msg of
             ({model | defs = defs}, Cmd.map UpdateScope cmd)
 
 updateDefinitions : DefinitionsMsg -> DefinitionsModel -> (DefinitionsModel, Cmd DefinitionsMsg)
-updateDefinitions msg rmodel = case Debug.log "Update definitions" msg of
+updateDefinitions msg rmodel = case msg of
     UpdateVariable name vmsg -> case rmodel of
         Err emsg -> (Err emsg,Cmd.none)
         Ok model -> case Dict.get name model.definitions of
@@ -499,13 +523,13 @@ updateDefinitions msg rmodel = case Debug.log "Update definitions" msg of
                                     (Ok nmodel,Cmd.map (UpdateVariable name) cmd)
 
 updateExpression : EvalMsg -> Result EvalError Expression -> (Result EvalError Expression,Cmd EvalMsg)
-updateExpression msg model = case Debug.log "update expr" msg of
+updateExpression msg model = case msg of
     ReceiveResult path x -> case model `Result.andThen` (placeResult path x) of
         Err err -> (Err err,Cmd.none)
         Ok expr -> eval Dict.empty expr
 
 placeResult: List Int -> TAtom -> Expression -> Result String Expression
-placeResult path atom expr = case Debug.log "place" path of
+placeResult path atom expr = case path of
     [] -> case expr of
         WaitForResult -> Ok <| JustAtom atom
         _ -> Err <| "Trying to place a result at a "++(toString expr)
@@ -517,7 +541,8 @@ placeResult path atom expr = case Debug.log "place" path of
         (BinOp op a b,0) -> placeResult rest atom a `Result.andThen` (\sa -> Ok <| BinOp op sa b)
         (BinOp op a b,1) -> placeResult rest atom b `Result.andThen` (\sb -> Ok <| BinOp op a sb)
         (BinOp _ _ _,_) -> Err "Path > 1 when placing through BinOp"
-        _ -> Err "Not implemented"
+        (FunctionApplication fn args,_) -> if (a<0) || (a>=(List.length args)) then Err "Path not valid arg index in function" else
+            Result.map (FunctionApplication fn) <| List.foldr (Result.map2 (\arg -> \nargs -> arg::nargs)) (Ok []) (List.indexedMap (\i -> \v -> if i==a then placeResult rest atom v else Ok v) args)
 
 
 subscriptions model = Sub.none
